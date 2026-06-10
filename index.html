@@ -57,6 +57,7 @@
         <div class="form-actions">
           <button type="submit" class="btn primary">Submit</button>
           <button type="button" id="clearBtn" class="btn ghost">Clear</button>
+          <button type="button" id="exportBtn" class="btn ghost">Export CSV</button>
         </div>
       </form>
     </section>
@@ -68,6 +69,19 @@
       </div>
       <ul id="recordsList" class="records-list" aria-live="polite"></ul>
       <div id="emptyState" class="empty-state">No submissions yet — add a delivery above.</div>
+    </section>
+
+    <!-- Debug panel -->
+    <section class="debug-panel" id="debugPanel" aria-hidden="true">
+      <div class="debug-header">
+        <strong>Debug Panel</strong>
+        <div class="debug-actions">
+          <button id="dumpBtn" class="btn ghost">Dump Storage</button>
+          <button id="clearAllBtn" class="btn ghost danger">Clear All</button>
+          <button id="toggleDebugBtn" class="btn ghost">Toggle Debug</button>
+        </div>
+      </div>
+      <pre id="debugOutput" class="debug-output" aria-live="polite"></pre>
     </section>
 
     <!-- toast / success -->

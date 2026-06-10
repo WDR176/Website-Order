@@ -1,9 +1,8 @@
-// script.js - handles validation, local storage, CSV export, and UI updates
+// script.js - enhanced validation, local storage, CSV export, UI updates and debugging helpers
 
 // Reusable data model for a delivery record
 class DeliveryRecord {
   constructor({ dateTime, deliveryBoy, bagNumber, ordersCount, gelPadsCount }) {
-    // dateTime should be an ISO string
     this.dateTime = dateTime || new Date().toISOString();
     this.deliveryBoy = String(deliveryBoy || '').trim();
     this.bagNumber = String(bagNumber || '').trim();
@@ -11,18 +10,16 @@ class DeliveryRecord {
     this.gelPadsCount = Number.isFinite(Number(gelPadsCount)) ? Number(gelPadsCount) : 0;
   }
 
-  // Create a record from the form fields (DOM elements values)
   static fromFormValues({ deliveryBoy, bagNumber, ordersCount, gelPadsCount }) {
     return new DeliveryRecord({
       dateTime: new Date().toISOString(),
-      deliveryBoy: deliveryBoy.trim(),
-      bagNumber: bagNumber.trim(),
+      deliveryBoy: String(deliveryBoy || '').trim(),
+      bagNumber: String(bagNumber || '').trim(),
       ordersCount: Number(ordersCount),
       gelPadsCount: Number(gelPadsCount)
     });
   }
 
-  // Create from a plain object (e.g., loaded from storage)
   static fromObject(obj) {
     if (!obj) return null;
     return new DeliveryRecord({
@@ -34,23 +31,18 @@ class DeliveryRecord {
     });
   }
 
-  // CSV header
   static csvHeader() {
     return ['DateTime', 'DeliveryBoy', 'BagNumber', 'OrdersCount', 'GelPadsCount'].join(',');
   }
 
-  // Escape and quote a CSV value
   static csvEscape(value) {
     if (value === null || value === undefined) return '';
     const s = String(value);
-    // escape double quotes by doubling them
     const escaped = s.replace(/"/g, '""');
-    // wrap in quotes if it contains comma, quote or newline
     if (/[",\n\r]/.test(s)) return `"${escaped}"`;
     return escaped;
   }
 
-  // Return a single CSV row (no header)
   toCSVRow() {
     return [
       DeliveryRecord.csvEscape(this.dateTime),
@@ -61,7 +53,6 @@ class DeliveryRecord {
     ].join(',');
   }
 
-  // Convert to plain object for storage
   toObject() {
     return {
       dateTime: this.dateTime,
@@ -72,7 +63,6 @@ class DeliveryRecord {
     };
   }
 
-  // Convert a list of plain objects or DeliveryRecord instances to a CSV string (with header)
   static listToCSV(list) {
     const rows = [DeliveryRecord.csvHeader()];
     for (const item of list) {
@@ -83,15 +73,22 @@ class DeliveryRecord {
   }
 }
 
-// DOM logic
+// App logic with improved debugging and error handling
 document.addEventListener('DOMContentLoaded', () => {
   const form = document.getElementById('deliveryForm');
   const clearBtn = document.getElementById('clearBtn');
+  const exportBtn = document.getElementById('exportBtn');
   const toast = document.getElementById('toast');
   const toastMsg = document.getElementById('toastMsg');
 
   const recordsList = document.getElementById('recordsList');
   const emptyState = document.getElementById('emptyState');
+
+  const dumpBtn = document.getElementById('dumpBtn');
+  const clearAllBtn = document.getElementById('clearAllBtn');
+  const toggleDebugBtn = document.getElementById('toggleDebugBtn');
+  const debugPanel = document.getElementById('debugPanel');
+  const debugOutput = document.getElementById('debugOutput');
 
   const fields = {
     deliveryBoy: document.getElementById('deliveryBoy'),
@@ -107,11 +104,25 @@ document.addEventListener('DOMContentLoaded', () => {
     gelPadsCount: document.getElementById('err-gelPadsCount')
   };
 
-  // storage keys
+  // keys
   const STORAGE_JSON_KEY = 'delivery_submissions_v1';
   const STORAGE_CSV_KEY = 'delivery_submissions_csv_v1';
+  const DEBUG_ENABLED_KEY = 'delivery_debug_enabled_v1';
 
-  // load existing submissions (array of plain objects)
+  // debug mode: enabled via url param ?debug=1 or toggled in UI
+  const urlParams = new URLSearchParams(window.location.search);
+  let debug = urlParams.get('debug') === '1' || localStorage.getItem(DEBUG_ENABLED_KEY) === 'true';
+  setDebugUI(debug);
+
+  function log(...args) {
+    if (debug) console.debug('[DeliveryApp]', ...args);
+  }
+
+  function info(...args) { console.info('[DeliveryApp]', ...args); }
+  function warn(...args) { console.warn('[DeliveryApp]', ...args); }
+  function error(...args) { console.error('[DeliveryApp]', ...args); }
+
+  // load existing submissions
   let submissions = loadSubmissions();
   renderList();
 
@@ -129,7 +140,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const isValid = validate(formValues);
     if (!isValid) return;
 
-    // Build a DeliveryRecord (captures current date/time)
     const record = DeliveryRecord.fromFormValues({
       deliveryBoy: formValues.deliveryBoy,
       bagNumber: formValues.bagNumber,
@@ -137,19 +147,20 @@ document.addEventListener('DOMContentLoaded', () => {
       gelPadsCount: Number(formValues.gelPadsCount)
     });
 
-    // store record as plain object in submissions
-    submissions.unshift(record.toObject());
-
-    // persist both JSON and CSV representations
-    saveSubmissions(submissions);
-    saveCSV(submissions);
-
-    renderList();
-
-    showToast('Submission saved — entry added (CSV stored)');
-
-    form.reset();
-    fields.deliveryBoy.focus();
+    try {
+      submissions.unshift(record.toObject());
+      saveSubmissions(submissions);
+      saveCSV(submissions);
+      renderList();
+      showToast('Submission saved — entry added (CSV stored)');
+      log('Saved record', record.toObject());
+      form.reset();
+      fields.deliveryBoy.focus();
+    } catch (err) {
+      error('Failed to save submission', err);
+      showToast('Error saving submission', 3500);
+      appendDebug(`Save error: ${err?.message || err}`);
+    }
   });
 
   clearBtn.addEventListener('click', () => {
@@ -157,6 +168,26 @@ document.addEventListener('DOMContentLoaded', () => {
     clearErrors();
     fields.deliveryBoy.focus();
   });
+
+  exportBtn.addEventListener('click', async () => {
+    try {
+      const csv = DeliveryRecord.listToCSV(submissions);
+      await downloadCSV(csv);
+      showToast('CSV downloaded');
+      log('Exported CSV, rows:', submissions.length);
+    } catch (err) {
+      error('Export failed', err);
+      showToast('Export failed', 3000);
+      appendDebug(`Export error: ${err?.message || err}`);
+    }
+  });
+
+  dumpBtn.addEventListener('click', () => dumpStorage());
+  clearAllBtn.addEventListener('click', () => {
+    if (!confirm('Clear all submissions from local storage? This cannot be undone.')) return;
+    clearAllSubmissions();
+  });
+  toggleDebugBtn.addEventListener('click', () => toggleDebug());
 
   function validate(values) {
     let ok = true;
@@ -181,9 +212,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return ok;
   }
 
-  function clearErrors() {
-    Object.values(errors).forEach(el => el.textContent = '');
-  }
+  function clearErrors() { Object.values(errors).forEach(el => el.textContent = ''); }
 
   function showToast(message, ms = 2500) {
     toastMsg.textContent = message;
@@ -196,10 +225,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const raw = localStorage.getItem(STORAGE_JSON_KEY);
       if (!raw) return [];
       const parsed = JSON.parse(raw);
-      // ensure every item has consistent fields (migrate older createdAt -> dateTime)
+      log('Loaded submissions from storage:', parsed.length);
       return parsed.map(p => DeliveryRecord.fromObject(p).toObject());
     } catch (err) {
-      console.warn('Failed to load submissions', err);
+      warn('Failed to load submissions', err);
+      appendDebug(`Load error: ${err?.message || err}`);
       return [];
     }
   }
@@ -207,8 +237,11 @@ document.addEventListener('DOMContentLoaded', () => {
   function saveSubmissions(list) {
     try {
       localStorage.setItem(STORAGE_JSON_KEY, JSON.stringify(list));
+      log('Saved JSON submissions', list.length);
     } catch (err) {
-      console.warn('Failed to save submissions', err);
+      warn('Failed to save submissions', err);
+      appendDebug(`Save submissions error: ${err?.message || err}`);
+      throw err;
     }
   }
 
@@ -216,8 +249,11 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const csv = DeliveryRecord.listToCSV(list);
       localStorage.setItem(STORAGE_CSV_KEY, csv);
+      log('Saved CSV to storage, size:', csv.length);
     } catch (err) {
-      console.warn('Failed to save CSV', err);
+      warn('Failed to save CSV', err);
+      appendDebug(`Save CSV error: ${err?.message || err}`);
+      throw err;
     }
   }
 
@@ -252,7 +288,28 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // small helper to avoid XSS in inserted strings
+  // CSV download helper (returns a Promise)
+  async function downloadCSV(csvString) {
+    return new Promise((resolve, reject) => {
+      try {
+        const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const now = new Date();
+        const ts = now.toISOString().replace(/[:.]/g, '-');
+        a.download = `delivery_records_${ts}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        resolve();
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
   function escapeHtml(s) {
     return String(s)
       .replaceAll('&', '&amp;')
@@ -262,9 +319,65 @@ document.addEventListener('DOMContentLoaded', () => {
       .replaceAll("'", '&#39;');
   }
 
-  // Expose a developer helper on window to retrieve the stored CSV (useful for debugging/export)
+  // Debug helpers
+  function appendDebug(text) {
+    try {
+      const ts = new Date().toISOString();
+      debugOutput.textContent = `${ts} - ${text}\n` + debugOutput.textContent;
+    } catch (e) { console.warn('appendDebug failed', e); }
+  }
+
+  function dumpStorage() {
+    try {
+      const json = localStorage.getItem(STORAGE_JSON_KEY) || '[]';
+      const csv = localStorage.getItem(STORAGE_CSV_KEY) || '';
+      const out = {
+        jsonCount: JSON.parse(json).length,
+        jsonSample: JSON.parse(json).slice(0,5),
+        csvLength: csv.length
+      };
+      debugOutput.textContent = JSON.stringify(out, null, 2);
+      log('Storage dump', out);
+      showToast('Storage dumped to debug panel');
+    } catch (err) {
+      appendDebug(`Dump failed: ${err?.message || err}`);
+      showToast('Dump failed', 3000);
+    }
+  }
+
+  function clearAllSubmissions() {
+    try {
+      localStorage.removeItem(STORAGE_JSON_KEY);
+      localStorage.removeItem(STORAGE_CSV_KEY);
+      submissions = [];
+      renderList();
+      debugOutput.textContent = 'Cleared all submissions';
+      showToast('All submissions cleared');
+      log('Cleared storage');
+    } catch (err) {
+      appendDebug(`ClearAll failed: ${err?.message || err}`);
+      showToast('Clear failed', 3000);
+    }
+  }
+
+  function setDebugUI(enabled) {
+    debug = Boolean(enabled);
+    localStorage.setItem(DEBUG_ENABLED_KEY, debug ? 'true' : 'false');
+    debugPanel.style.display = debug ? 'block' : 'none';
+    log('Debug mode', debug);
+  }
+
+  function toggleDebug() { setDebugUI(!debug); }
+
+  // Expose helpers for debugging / automation
   window.__deliveryRecords = {
     getAllJSON: () => JSON.parse(localStorage.getItem(STORAGE_JSON_KEY) || '[]'),
-    getCSV: () => localStorage.getItem(STORAGE_CSV_KEY) || DeliveryRecord.listToCSV([])
+    getCSV: () => localStorage.getItem(STORAGE_CSV_KEY) || DeliveryRecord.listToCSV([]),
+    clearAll: clearAllSubmissions,
+    downloadCSV: async () => { const csv = window.__deliveryRecords.getCSV(); await downloadCSV(csv); }
   };
+
+  // show debug panel automatically if debug param is provided
+  if (debug) dumpStorage();
+
 });
