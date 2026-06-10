@@ -1,0 +1,346 @@
+/// ==========================================
+// TDSReconciliation.Functions/Functions/ImportLedgerFromExcel.cs
+// Combined TDS + TCS Ledger Import
+// POST: /api/bc/import-ledger-excel
+//
+// multipart/form-data fields:  file, entity_id, ledger_type
+// application/json fields:     excel_base64, entity_id, file_name, ledger_type
+//
+// ledger_type = "TDS" | "TCS" | "ALL"
+// ==========================================
+using System;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Azure.WebJobs;
+using Microsoft.Azure.WebJobs.Extensions.Http;
+using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
+using TDSReconciliation.Core.Models;
+using TDSReconciliation.Core.Services;
+
+namespace TDSReconciliation.Functions
+{
+    public class ImportLedgerFromExcel
+    {
+        private readonly IExcelLedgerService _ledgerService;
+        private readonly ILogger<ImportLedgerFromExcel> _logger;
+
+        public ImportLedgerFromExcel(
+            IExcelLedgerService ledgerService,
+            ILogger<ImportLedgerFromExcel> logger)
+        {
+            _ledgerService = ledgerService;
+            _logger        = logger;
+        }
+
+        [FunctionName("ImportLedgerFromExcel")]
+        public async Task<IActionResult> Run(
+            [HttpTrigger(AuthorizationLevel.Function, "post",
+                Route = "bc/import-ledger-excel")] HttpRequest req)
+        {
+            var startTime = DateTime.UtcNow;
+            _logger.LogInformation("ImportLedgerFromExcel triggered");
+
+            try
+            {
+                // ── Step 1: Extract file + params from request ────────────
+                byte[] excelBytes = null;
+                string entityId   = "UNKNOWN";
+                string fileName   = "ledger.xlsx";
+                string ledgerType = "";
+
+                var contentType = req.ContentType ?? "";
+
+                if (contentType.Contains("application/json"))
+                {
+                    var body = await new StreamReader(req.Body).ReadToEndAsync();
+                    var data = JsonConvert.DeserializeObject<ExcelImportRequest>(body);
+
+                    if (string.IsNullOrWhiteSpace(data?.ExcelBase64))
+                        return Fail("NO_EXCEL_DATA", "No Excel data in 'excel_base64' field.");
+
+                    excelBytes = Convert.FromBase64String(data.ExcelBase64);
+                    entityId   = data.EntityId   ?? "UNKNOWN";
+                    fileName   = data.FileName   ?? "ledger.xlsx";
+                    ledgerType = data.LedgerType ?? "";
+                }
+                else if (contentType.Contains("multipart/form-data"))
+                {
+                    var form = await req.ReadFormAsync();
+                    var file = form.Files["file"];
+
+                    if (file == null)
+                        return Fail("NO_FILE", "No file uploaded. Use field name 'file'.");
+
+                    using var ms = new MemoryStream();
+                    await file.CopyToAsync(ms);
+                    excelBytes = ms.ToArray();
+                    entityId   = form["entity_id"].ToString()  ?? "UNKNOWN";
+                    ledgerType = form["ledger_type"].ToString() ?? "";
+                    fileName   = file.FileName;
+                }
+                else
+                {
+                    return Fail("INVALID_CONTENT_TYPE",
+                        "Content-Type must be 'application/json' or 'multipart/form-data'.");
+                }
+
+                // ── Step 2: Validate ──────────────────────────────────────
+                if (excelBytes == null || excelBytes.Length == 0)
+                    return Fail("EMPTY_FILE", "Uploaded file is empty.");
+
+                var ext = Path.GetExtension(fileName).ToLowerInvariant();
+                if (ext != ".xlsx" && ext != ".xls" && ext != ".csv")
+                    return Fail("INVALID_FILE_TYPE", "File must be .xlsx, .xls, or .csv");
+
+                ledgerType = ledgerType.Trim().ToUpper();
+                if (ledgerType != "TDS" && ledgerType != "TCS" && ledgerType != "ALL")
+                    return Fail("INVALID_LEDGER_TYPE",
+                        "'ledger_type' must be 'TDS', 'TCS', or 'ALL'.");
+
+                // ── Step 3: Parse via IExcelLedgerService ─────────────────
+                var entries = ledgerType switch
+                {
+                    "TDS" => await _ledgerService.ParseLedgerExcel(excelBytes, fileName),
+                    "TCS" => await _ledgerService.ParseTcsLedgerExcel(excelBytes, fileName),
+                    _     => await _ledgerService.ParseAllLedgerExcel(excelBytes, fileName)
+                };
+
+                if (entries == null || entries.Count == 0)
+                    return Fail("NO_DATA_FOUND",
+                        $"No valid {ledgerType} entries found in the uploaded file.");
+
+                // ── Step 4: Build summary ─────────────────────────────────
+                var processingTime = (DateTime.UtcNow - startTime).TotalSeconds;
+
+                var tdsEntries = entries.Where(e =>
+                    string.Equals(e.TaxType, "TDS", StringComparison.OrdinalIgnoreCase)).ToList();
+                var tcsEntries = entries.Where(e =>
+                    string.Equals(e.TaxType, "TCS", StringComparison.OrdinalIgnoreCase)).ToList();
+
+                var responseData = new LedgerImportData
+                {
+                    EntityId               = entityId,
+                    FileName               = fileName,
+                    LedgerType             = ledgerType,
+                    ImportedAt             = DateTime.UtcNow.ToString("o"),
+                    ProcessingTimeSeconds  = Math.Round(processingTime, 2),
+                    EntryCount             = entries.Count,
+
+                    // TDS totals
+                    TdsCount               = tdsEntries.Count,
+                    TotalTdsAmount         = tdsEntries.Sum(e => e.TdsAmount),
+                    TotalCreditAmount      = tdsEntries.Sum(e => e.CreditAmount),
+
+                    // TCS totals
+                    TcsCount               = tcsEntries.Count,
+                    TotalTcsAmount         = tcsEntries.Sum(e => e.TcsAmount),
+                    TotalSalesAmount       = tcsEntries.Sum(e => e.SalesAmount),
+
+                    LedgerEntries          = entries
+                };
+
+                _logger.LogInformation(
+                    $"Import done [{ledgerType}]: {entries.Count} entries | " +
+                    $"TDS={responseData.TotalTdsAmount:N2} ({tdsEntries.Count}) | " +
+                    $"TCS={responseData.TotalTcsAmount:N2} ({tcsEntries.Count}) | " +
+                    $"{processingTime:F2}s");
+
+                return new OkObjectResult(
+                    LedgerImportResponse.Success(responseData,
+                        $"{ledgerType} ledger imported — {entries.Count} entries."));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unexpected error in ImportLedgerFromExcel");
+                return new ObjectResult(LedgerImportResponse.Failure(ex)) { StatusCode = 500 };
+            }
+        }
+
+        // ── Helper ────────────────────────────────────────────────────────────
+        private static BadRequestObjectResult Fail(string code, string message) =>
+            new(LedgerImportResponse.Failure(code, message));
+    }
+}
+
+// // ==========================================
+// // TDSReconciliation.Functions/Functions/ImportLedgerFromExcel.cs
+// // Handles import of ledger data from Excel files (.xlsx, .xls, .csv)
+// // ==========================================
+// using System;
+// using System.IO;
+// using System.Threading.Tasks;
+// using Microsoft.AspNetCore.Http;
+// using Microsoft.AspNetCore.Mvc;
+// using Microsoft.Azure.WebJobs;
+// using Microsoft.Azure.WebJobs.Extensions.Http;
+// using Microsoft.Extensions.Logging;
+// using Newtonsoft.Json;
+// using TDSReconciliation.Core.Models;
+// using TDSReconciliation.Core.Services;
+// using System.Linq;
+ 
+// namespace TDSReconciliation.Functions
+// {
+//     public class ImportLedgerFromExcel
+//     {
+//         private readonly ExcelLedgerService _excelLedgerService;
+//         private readonly ILogger<ImportLedgerFromExcel> _logger;
+ 
+//         public ImportLedgerFromExcel(ExcelLedgerService excelLedgerService, ILogger<ImportLedgerFromExcel> logger)
+//         {
+//             _excelLedgerService = excelLedgerService;
+//             _logger = logger;
+//         }
+ 
+//         [FunctionName("ImportLedgerFromExcel")]
+//         public async Task<IActionResult> Run(
+//             [HttpTrigger(AuthorizationLevel.Function, "post", Route = "bc/import-ledger-excel")] HttpRequest req)
+//         {
+//             var startTime = DateTime.UtcNow;
+ 
+//             try
+//             {
+//                 _logger.LogInformation("Starting ledger Excel import process");
+ 
+//                 byte[] excelBytes = null;
+//                 string entityId = "UNKNOWN";
+//                 string fileName = "";
+//                 var contentType = req.ContentType ?? "";
+ 
+//                 // Handle JSON request (base64 encoded Excel)
+//                 if (contentType.Contains("application/json"))
+//                 {
+//                     string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
+//                     var requestData = JsonConvert.DeserializeObject<ExcelImportRequest>(requestBody);
+ 
+//                     if (string.IsNullOrEmpty(requestData?.ExcelBase64))
+//                     {
+//                         return new BadRequestObjectResult(new
+//                         {
+//                             status = "error",
+//                             error_code = "NO_EXCEL_DATA",
+//                             message = "No Excel data provided in 'excel_base64' field"
+//                         });
+//                     }
+ 
+//                     excelBytes = Convert.FromBase64String(requestData.ExcelBase64);
+//                     entityId = requestData.EntityId ?? "UNKNOWN";
+//                     fileName = requestData.FileName ?? "ledger.xlsx";
+//                     _logger.LogInformation($"Received base64 Excel, size: {excelBytes.Length} bytes");
+//                 }
+//                 // Handle multipart/form-data (file upload)
+//                 else if (contentType.Contains("multipart/form-data"))
+//                 {
+//                     var form = await req.ReadFormAsync();
+//                     var file = form.Files["file"];
+ 
+//                     if (file == null)
+//                     {
+//                         return new BadRequestObjectResult(new
+//                         {
+//                             status = "error",
+//                             error_code = "NO_FILE",
+//                             message = "No file uploaded. Use 'file' field name."
+//                         });
+//                     }
+ 
+//                     using var memoryStream = new MemoryStream();
+//                     await file.CopyToAsync(memoryStream);
+//                     excelBytes = memoryStream.ToArray();
+//                     entityId = form["entity_id"].ToString() ?? "UNKNOWN";
+//                     fileName = file.FileName;
+//                     _logger.LogInformation($"Received file upload '{fileName}', size: {excelBytes.Length} bytes");
+//                 }
+//                 else
+//                 {
+//                     return new BadRequestObjectResult(new
+//                     {
+//                         status = "error",
+//                         error_code = "INVALID_CONTENT_TYPE",
+//                         message = "Content-Type must be 'application/json' or 'multipart/form-data'"
+//                     });
+//                 }
+ 
+//                 if (excelBytes == null || excelBytes.Length == 0)
+//                 {
+//                     return new BadRequestObjectResult(new
+//                     {
+//                         status = "error",
+//                         error_code = "EMPTY_FILE",
+//                         message = "Excel file is empty"
+//                     });
+//                 }
+ 
+//                 // Validate file extension
+//                 var extension = Path.GetExtension(fileName).ToLowerInvariant();
+//                 if (extension != ".xlsx" && extension != ".xls" && extension != ".csv")
+//                 {
+//                     return new BadRequestObjectResult(new
+//                     {
+//                         status = "error",
+//                         error_code = "INVALID_FILE_TYPE",
+//                         message = "File must be .xlsx, .xls, or .csv format"
+//                     });
+//                 }
+ 
+//                 // Parse Excel file
+//                 var ledgerEntries = await _excelLedgerService.ParseLedgerExcel(excelBytes, fileName);
+ 
+//                 if (ledgerEntries == null || ledgerEntries.Count == 0)
+//                 {
+//                     return new BadRequestObjectResult(new
+//                     {
+//                         status = "error",
+//                         error_code = "NO_DATA_FOUND",
+//                         message = "No valid ledger entries found in Excel file"
+//                     });
+//                 }
+ 
+//                 var processingTime = (DateTime.UtcNow - startTime).TotalSeconds;
+ 
+//                 // Calculate summary statistics
+//                 var totalCredit = ledgerEntries.Sum(e => e.CreditAmount);
+//                 var totalTds = ledgerEntries.Sum(e => e.TdsAmount);
+ 
+//                 var response = new LedgerImportResponse
+//                 {
+//                     Status = "success",
+//                     Message = "Ledger data imported successfully from Excel",
+//                     Data = new LedgerImportData
+//                     {
+//                         EntityId = entityId,
+//                         FileName = fileName,
+//                         ImportedAt = DateTime.UtcNow.ToString("o"),
+//                         ProcessingTimeSeconds = Math.Round(processingTime, 2),
+//                         EntryCount = ledgerEntries.Count,
+//                         TotalCreditAmount = totalCredit,
+//                         TotalTdsAmount = totalTds,
+//                         LedgerEntries = ledgerEntries
+//                     }
+//                 };
+ 
+//                 _logger.LogInformation($"Ledger Excel import completed: {ledgerEntries.Count} entries, " +
+//                     $"Total Credit: {totalCredit:N2}, Total TDS: {totalTds:N2} in {processingTime:F1}s");
+ 
+//                 return new OkObjectResult(response);
+//             }
+//             catch (Exception ex)
+//             {
+//                 _logger.LogError(ex, "Unexpected error in ledger Excel import");
+//                 return new ObjectResult(new
+//                 {
+//                     status = "error",
+//                     error_code = "INTERNAL_ERROR",
+//                     message = $"Internal server error: {ex.Message}",
+//                     details = ex.StackTrace
+//                 })
+//                 { StatusCode = 500 };
+//             }
+//         }
+//     }
+// }
+ 
