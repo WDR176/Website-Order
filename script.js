@@ -257,6 +257,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function deleteSubmission(index) {
+    try {
+      const deleted = submissions[index];
+      submissions.splice(index, 1);
+      saveSubmissions(submissions);
+      saveCSV(submissions);
+      renderList();
+      showToast('Entry deleted');
+      log('Deleted record at index:', index, deleted);
+    } catch (err) {
+      error('Failed to delete submission', err);
+      showToast('Error deleting entry', 3000);
+      appendDebug(`Delete error: ${err?.message || err}`);
+    }
+  }
+
   function renderList() {
     recordsList.innerHTML = '';
     if (!submissions || submissions.length === 0) {
@@ -265,14 +281,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     emptyState.style.display = 'none';
 
-    submissions.forEach(item => {
+    submissions.forEach((item, index) => {
       const li = document.createElement('li');
       li.className = 'record';
       const dateTime = item.dateTime ? new Date(item.dateTime) : null;
       const timeStr = dateTime ? dateTime.toLocaleString() : '';
 
       li.innerHTML = `
-        <h3>${escapeHtml(item.deliveryBoy)}</h3>
+        <div class="record-header">
+          <h3>${escapeHtml(item.deliveryBoy)}</h3>
+          <button class="btn-delete" title="Delete this entry" data-index="${index}">×</button>
+        </div>
         <div class="meta">
           <span><strong>Bag:</strong> ${escapeHtml(item.bagNumber)}</span>
           <span>•</span>
@@ -284,6 +303,15 @@ document.addEventListener('DOMContentLoaded', () => {
           ${escapeHtml(timeStr)}
         </div>
       `;
+      
+      // Add delete button event listener
+      const deleteBtn = li.querySelector('.btn-delete');
+      deleteBtn.addEventListener('click', () => {
+        if (confirm(`Delete entry for ${escapeHtml(item.deliveryBoy)} - ${escapeHtml(item.bagNumber)}?`)) {
+          deleteSubmission(index);
+        }
+      });
+      
       recordsList.appendChild(li);
     });
   }
@@ -322,6 +350,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Debug helpers
   function appendDebug(text) {
     try {
+      if (!debugOutput) return;
       const ts = new Date().toISOString();
       debugOutput.textContent = `${ts} - ${text}\n` + debugOutput.textContent;
     } catch (e) { console.warn('appendDebug failed', e); }
@@ -374,7 +403,8 @@ document.addEventListener('DOMContentLoaded', () => {
     getAllJSON: () => JSON.parse(localStorage.getItem(STORAGE_JSON_KEY) || '[]'),
     getCSV: () => localStorage.getItem(STORAGE_CSV_KEY) || DeliveryRecord.listToCSV([]),
     clearAll: clearAllSubmissions,
-    downloadCSV: async () => { const csv = window.__deliveryRecords.getCSV(); await downloadCSV(csv); }
+    downloadCSV: async () => { const csv = window.__deliveryRecords.getCSV(); await downloadCSV(csv); },
+    deleteByIndex: deleteSubmission
   };
 
   // show debug panel automatically if debug param is provided

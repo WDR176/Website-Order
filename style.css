@@ -160,11 +160,53 @@ html,body{
   padding:12px;
   box-shadow:var(--shadow);
   border:1px solid #f1f4f8;
+  position:relative;
+  transition:box-shadow 0.2s, border-color 0.2s;
+}
+
+.record:hover{
+  box-shadow: 0 8px 24px rgba(15,23,42,0.12);
+  border-color: #e0e7ff;
+}
+
+.record-header{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:8px;
+  margin-bottom:6px;
 }
 
 .record h3{
-  margin:0 0 6px 0;
+  margin:0;
   font-size:1rem;
+  flex:1;
+}
+
+.btn-delete{
+  cursor:pointer;
+  background:transparent;
+  border:none;
+  color:var(--danger);
+  font-size:1.5rem;
+  padding:0;
+  width:24px;
+  height:24px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border-radius:50%;
+  transition:background 0.2s, color 0.2s;
+  flex-shrink:0;
+}
+
+.btn-delete:hover{
+  background:rgba(239,68,68,0.1);
+  color:var(--danger);
+}
+
+.btn-delete:active{
+  background:rgba(239,68,68,0.2);
 }
 
 .record .meta{
@@ -249,4 +291,11 @@ html,body{
   .app{ margin:14px }
   .app-header h1{ font-size:1.05rem }
   .subtitle{ font-size:0.88rem }
+  .record-header{
+    flex-direction:column;
+    gap:4px;
+  }
+  .btn-delete{
+    align-self:flex-end;
+  }
 }
