@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Delivery Order Tracker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <header class="app-header">
+      <div>
+        <h1>Delivery Order Tracker</h1>
+        <p class="subtitle">Log delivery bag details quickly — mobile friendly single page app.</p>
+      </div>
+      <div class="logo" aria-hidden="true">
+        <!-- simple truck icon -->
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="1" y="3" width="15" height="13"></rect>
+          <polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon>
+          <circle cx="7.5" cy="19.5" r="1.5"></circle>
+          <circle cx="18.5" cy="19.5" r="1.5"></circle>
+        </svg>
+      </div>
+    </header>
+
+    <section class="form-card">
+      <form id="deliveryForm" class="form" novalidate>
+        <div class="form-row">
+          <label for="deliveryBoy">Delivery Boy Name</label>
+          <input id="deliveryBoy" name="deliveryBoy" type="text" placeholder="e.g. Rajesh Kumar" required>
+          <div class="error" id="err-deliveryBoy"></div>
+        </div>
+
+        <div class="form-row">
+          <label for="bagNumber">Bag Number</label>
+          <input id="bagNumber" name="bagNumber" type="text" placeholder="e.g. BAG-1023" required>
+          <div class="error" id="err-bagNumber"></div>
+        </div>
+
+        <div class="form-row inline">
+          <div>
+            <label for="ordersCount">Orders Count</label>
+            <input id="ordersCount" name="ordersCount" type="number" min="1" placeholder="0" required>
+            <div class="error" id="err-ordersCount"></div>
+          </div>
+
+          <div>
+            <label for="gelPadsCount">Gel Pads Count</label>
+            <input id="gelPadsCount" name="gelPadsCount" type="number" min="0" placeholder="0" required>
+            <div class="error" id="err-gelPadsCount"></div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn primary">Submit</button>
+          <button type="button" id="clearBtn" class="btn ghost">Clear</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="records">
+      <div class="records-header">
+        <h2>Recent Submissions</h2>
+        <small class="muted">Entries are stored locally in your browser.</small>
+      </div>
+      <ul id="recordsList" class="records-list" aria-live="polite"></ul>
+      <div id="emptyState" class="empty-state">No submissions yet — add a delivery above.</div>
+    </section>
+
+    <!-- toast / success -->
+    <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true">
+      <span id="toastMsg">Saved</span>
+    </div>
+
+    <footer class="app-footer">
+      <small>Built with HTML, CSS & JavaScript — responsive SPA</small>
+    </footer>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
